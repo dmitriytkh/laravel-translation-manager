@@ -54,13 +54,51 @@ class Manager
     public function importTranslations($replace = false, $base = null, $import_group = false)
     {
         $counter = 0;
-        //allows for vendor lang files to be properly recorded through recursion.
         $vendor = true;
         if ($base == null) {
             $base = $this->app['path.lang'];
             $vendor = false;
         }
 
+        if (is_dir($this->app['path.base'] . '/Modules') && !$vendor) {
+            foreach ($this->files->directories($this->app['path.base'] . '/Modules') as $module) {
+                $moduleName = strtolower(basename($module));
+                if (is_dir($module . '/Resources/lang')){
+                    foreach ($this->files->directories($module . '/Resources/lang') as $langPath) {
+                        $locale = basename($langPath);
+                        $vendorName = $this->files->name($this->files->dirname($langPath));
+                        foreach ($this->files->allfiles($langPath) as $file) {
+                            $info = pathinfo($file);
+                            $group = $moduleName . '::' .$info['filename'];
+                            if ($import_group) {
+                                if ($import_group !== $group) {
+                                    continue;
+                                }
+                            }
+
+                            if (in_array($group, $this->config['exclude_groups'])) {
+                                continue;
+                            }
+                            $subLangPath = str_replace($langPath.DIRECTORY_SEPARATOR, '', $info['dirname']);
+                            $subLangPath = str_replace(DIRECTORY_SEPARATOR, '/', $subLangPath);
+                            $langPath = str_replace(DIRECTORY_SEPARATOR, '/', $langPath);
+
+                            if ($subLangPath != $langPath) {
+                                $group = $subLangPath.'/'.$group;
+                            }
+                            $translations = \Lang::get($group, [], $locale);
+
+                            if ($translations && is_array($translations)) {
+                                foreach (Arr::dot($translations) as $key => $value) {
+                                    $importedTranslation = $this->importTranslation($key, $value, $locale, $group, $replace);
+                                    $counter += $importedTranslation ? 1 : 0;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         foreach ($this->files->directories($base) as $langPath) {
             $locale = basename($langPath);
 
@@ -94,7 +132,7 @@ class Manager
                 }
 
                 if (! $vendor) {
-                    $translations = \Lang::getLoader()->load($locale, $group);
+                    $translations = \Lang::get($group, [], $locale);
                 } else {
                     $translations = include $file;
                     $group = 'vendor/'.$vendorName;
@@ -268,11 +306,19 @@ class Manager
                 $tree = $this->makeTree(Translation::ofTranslatedGroup($group)
                                                     ->orderByGroupKeys(Arr::get($this->config, 'sort_keys', false))
                                                     ->get());
-
+                $groupName = $group;
                 foreach ($tree as $locale => $groups) {
-                    if (isset($groups[$group])) {
-                        $translations = $groups[$group];
+                    if (isset($groups[$groupName])) {
+                        $translations = $groups[$groupName];
                         $path = $this->app['path.lang'];
+                        $module = explode('::', $groupName);
+                        if (isset($module[1])) {
+                            $group = $module[1];
+                            $path = $this->app['path.base'] . '/Modules/' . ucfirst($module[0]) . '/Resources/lang';
+                        }
+                        if(!is_dir($path)) {
+                            continue;
+                        }
 
                         $locale_path = $locale.DIRECTORY_SEPARATOR.$group;
                         if ($vendor) {
